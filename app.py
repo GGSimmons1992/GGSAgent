@@ -1,6 +1,44 @@
+class SeleniumWebpageTool(Tool):
+    """Tool for fetching web pages with JavaScript using Selenium"""
+
+    name = "selenium_webpage"
+    description = "Fetch the rendered content of a web page using Selenium (supports JavaScript). Returns the visible text content."
+    inputs = {
+        "url": {"type": "string", "description": "The URL of the web page to fetch"}
+    }
+    output_type = "string"
+
+    def forward(self, url: str) -> str:
+        try:
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            import shutil
+
+            # Check if chromedriver is available
+            chromedriver_path = shutil.which("chromedriver")
+            if not chromedriver_path:
+                return "ChromeDriver is not installed or not in PATH. Please install it to use this tool."
+            options = Options()
+            options.add_argument("--headless")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            driver = webdriver.Chrome(options=options)
+            driver.get(url)
+            # Wait for page to load
+            driver.implicitly_wait(5)
+            text = driver.find_element("tag name", "body").text
+            driver.quit()
+            if len(text) > 5000:
+                text = text[:5000] + "\n... (truncated)"
+            return text
+        except Exception as e:
+            return f"Error fetching page with Selenium: {str(e)}"
+
+
 """
 GGSAgent - A smolagents CodeAgent with Gradio interface
 """
+
 import os
 from dotenv import load_dotenv
 import gradio as gr
@@ -20,25 +58,24 @@ load_dotenv()
 
 class WikipediaSearchTool(Tool):
     """Tool for searching Wikipedia"""
+
     name = "wikipedia_search"
     description = "Search Wikipedia for information on a given topic. Returns a summary of the Wikipedia article."
     inputs = {
-        "query": {
-            "type": "string",
-            "description": "The search query for Wikipedia"
-        }
+        "query": {"type": "string", "description": "The search query for Wikipedia"}
     }
     output_type = "string"
-    
+
     def forward(self, query: str) -> str:
         """Search Wikipedia and return article summary"""
         try:
             import wikipedia
+
             # Search for the query
             results = wikipedia.search(query, results=1)
             if not results:
                 return f"No Wikipedia results found for '{query}'"
-            
+
             # Get the summary of the first result
             summary = wikipedia.summary(results[0], sentences=3)
             return f"Wikipedia - {results[0]}:\n{summary}"
@@ -51,86 +88,98 @@ def initialize_agent():
     # Get API keys from environment
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     hf_token = os.getenv("HF_TOKEN")
-    
+
     if not gemini_api_key:
         raise ValueError("GEMINI_API_KEY environment variable is required")
-    
+
     # Set environment variable for LiteLLM
     os.environ["GEMINI_API_KEY"] = gemini_api_key
     if hf_token:
         os.environ["HF_TOKEN"] = hf_token
-    
+
     # Initialize the LiteLLM model
     model = LiteLLMModel(model_id="gemini/gemini-2.5-flash")
-    
+
     # Initialize tools
     tools = [
         DuckDuckGoSearchTool(),
         VisitWebpageTool(),
+        SeleniumWebpageTool(),
         PythonInterpreterTool(),
         WikipediaSearchTool(),
     ]
-    
+
     # Create and return the agent
     agent = CodeAgent(tools=tools, model=model)
     return agent
 
 
-def process_query(prompt: str, file_input=None):
-    """Process user query with optional file input"""
+def process_query(prompt, file_input=None, history=None):
+    """Process user query with optional file input and conversation history"""
     try:
-        # Initialize agent
         agent = initialize_agent()
-        
-        # Prepare the full prompt
-        full_prompt = prompt
-        
+        if history is None:
+            history = []
+        # Build conversation context
+        conversation = ""
+        for user_msg, agent_msg in history:
+            conversation += f"User: {user_msg}\nAgent: {agent_msg}\n"
+        conversation += f"User: {prompt}\nAgent:"
+        full_prompt = conversation
         # If file is provided, add file information to the prompt
         if file_input is not None:
-            file_path = file_input.name if hasattr(file_input, 'name') else str(file_input)
+            file_path = (
+                file_input.name if hasattr(file_input, "name") else str(file_input)
+            )
             full_prompt += f"\n\nFile provided: {file_path}"
-            
-            # Try to read the file content if it's a text file
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    file_content = f.read()
-                    # Limit file content to avoid token limits
-                    if len(file_content) > 5000:
-                        file_content = file_content[:5000] + "\n... (truncated)"
-                    full_prompt += f"\n\nFile content:\n{file_content}"
+                if file_path.lower().endswith(".pdf"):
+                    try:
+                        import PyPDF2
+
+                        with open(file_path, "rb") as f:
+                            reader = PyPDF2.PdfReader(f)
+                            pdf_text = ""
+                            for page in reader.pages:
+                                pdf_text += page.extract_text() or ""
+                            if len(pdf_text) > 5000:
+                                pdf_text = pdf_text[:5000] + "\n... (truncated)"
+                            full_prompt += (
+                                f"\n\nPDF content (extracted text):\n{pdf_text}"
+                            )
+                    except Exception as e:
+                        full_prompt += f"\n\n(Could not extract PDF text: {str(e)})"
+                else:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        file_content = f.read()
+                        if len(file_content) > 5000:
+                            file_content = file_content[:5000] + "\n... (truncated)"
+                        full_prompt += f"\n\nFile content:\n{file_content}"
             except Exception as e:
                 full_prompt += f"\n\n(Could not read file content: {str(e)})"
-        
-        # Run the agent
         result = agent.run(full_prompt)
-        
-        return str(result)
-    
+        # Update history
+        history = history + [(prompt, str(result))]
+        return str(result), history
     except Exception as e:
-        return f"Error: {str(e)}"
+        if history is None:
+            history = []
+        history = history + [(prompt, f"Error: {str(e)}")]
+        return f"Error: {str(e)}", history
 
 
 def create_interface():
     """Create and configure the Gradio interface"""
-    
-    # Create the Gradio interface
+
+    # Create the Gradio interface with conversational memory
     interface = gr.Interface(
         fn=process_query,
         inputs=[
-            gr.Textbox(
-                label="Your Prompt",
-                placeholder="Ask me anything...",
-                lines=5
-            ),
-            gr.File(
-                label="Upload File (Optional)",
-                type="filepath"
-            )
+            gr.Textbox(label="Your Prompt", placeholder="Ask me anything...", lines=5),
+            gr.File(label="Upload File (Optional)", type="filepath"),
+            gr.State(),
         ],
-        outputs=gr.Textbox(
-            label="Agent Response",
-            lines=10
-        ),
+        outputs=[gr.Textbox(label="Agent Response", lines=10), gr.State()],
         title="GGSAgent - AI Agent Assistant",
         description="""
         An AI agent powered by smolagents with multiple tools:
@@ -142,13 +191,16 @@ def create_interface():
         Ask questions, request web searches, code execution, or provide files for analysis.
         """,
         examples=[
-            ["What is the capital of France?", None],
-            ["Search the web for the latest news on AI", None],
-            ["What does Wikipedia say about quantum computing?", None],
-            ["Calculate the fibonacci sequence up to 10 numbers using Python", None],
+            ["What is the capital of France?", None, None],
+            ["Search the web for the latest news on AI", None, None],
+            ["What does Wikipedia say about quantum computing?", None, None],
+            [
+                "Calculate the fibonacci sequence up to 10 numbers using Python",
+                None,
+                None,
+            ],
         ],
     )
-    
     return interface
 
 
@@ -160,7 +212,7 @@ def main():
         print("Please set it in a .env file or as an environment variable.")
         print("Example: GEMINI_API_KEY=your_api_key_here")
         return
-    
+
     # Create and launch the interface
     interface = create_interface()
     interface.launch(server_name="0.0.0.0", server_port=7860, share=False)
