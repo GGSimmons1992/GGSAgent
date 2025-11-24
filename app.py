@@ -61,7 +61,7 @@ def initialize_agent():
         os.environ["HF_TOKEN"] = hf_token
     
     # Initialize the LiteLLM model
-    model = LiteLLMModel(model_id="gemini/gemini-2.0-flash-exp")
+    model = LiteLLMModel(model_id="gemini/gemini-2.5-flash")
     
     # Initialize tools
     tools = [
@@ -147,7 +147,6 @@ def create_interface():
             ["What does Wikipedia say about quantum computing?", None],
             ["Calculate the fibonacci sequence up to 10 numbers using Python", None],
         ],
-        theme=gr.themes.Soft(),
     )
     
     return interface
