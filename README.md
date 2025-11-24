@@ -18,7 +18,7 @@ GGSAgent is an AI-powered agent that uses smolagents' CodeAgent with multiple to
   - File upload capability
   - Example queries to get started
 
-- **Powered by Gemini**: Uses Google's Gemini 2.0 Flash model via LiteLLM
+- **Powered by Gemini**: Uses Google's Gemini 2.5 Flash model via LiteLLM
 
 ## Setup
 
